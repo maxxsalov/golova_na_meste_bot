@@ -84,7 +84,33 @@ class Repository:
             .where(ChatMember.chat_id == chat_id, ChatMember.id != member_id)
         )
         result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.scalars().first()
+
+    async def get_other_members_in_chat(
+        self, chat_id: int, member_id: int,
+    ) -> list[ChatMember]:
+        stmt = (
+            select(ChatMember)
+            .where(ChatMember.chat_id == chat_id, ChatMember.id != member_id)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    def match_member_by_name(
+        self, members: list[ChatMember], name_hint: str,
+    ) -> ChatMember | None:
+        hint_lower = name_hint.lower()
+        for member in members:
+            if member.display_name.lower() == hint_lower:
+                return member
+        # Fuzzy: match stem (strip last 1-2 chars for Russian declensions)
+        hint_stem = hint_lower[:-2] if len(hint_lower) > 3 else hint_lower
+        for member in members:
+            name_lower = member.display_name.lower()
+            name_stem = name_lower[:-2] if len(name_lower) > 3 else name_lower
+            if hint_stem and name_stem and (hint_stem == name_stem or name_lower.startswith(hint_stem)):
+                return member
+        return None
 
     async def create_reminder(
         self,
