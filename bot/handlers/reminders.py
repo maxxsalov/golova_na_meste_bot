@@ -20,16 +20,26 @@ def _format_utc_to_local(utc_dt: datetime.datetime, tz_offset_minutes: int) -> s
 
 def _resolve_recipient_member(
     sender_member_id: int,
-    other_member: "ChatMember | None",
+    other_members: list["ChatMember"],
     recipient_keyword: str,
-) -> int | None:
+    repo: Repository,
+) -> int | None | str:
     if recipient_keyword == "мне":
         return sender_member_id
-    if recipient_keyword in ("ей", "ему") and other_member:
-        return other_member.id
     if recipient_keyword in ("нам", "всем"):
         return None
-    return None
+    if recipient_keyword in ("ей", "ему"):
+        if len(other_members) == 1:
+            return other_members[0].id
+        if len(other_members) == 0:
+            return "no_members"
+        # Multiple members — need name hint
+        return "ambiguous"
+    # recipient_keyword is a name hint from RECIPIENT_NAME_HINTS
+    matched = repo.match_member_by_name(other_members, recipient_keyword)
+    if matched:
+        return matched.id
+    return "not_found"
 
 
 @router.message(Command("my"))
@@ -165,15 +175,33 @@ async def handle_reminder_message(message: types.Message) -> None:
             chat_id, user_id, message.from_user.first_name,
         )
 
-        other_member = await repo.get_other_member_in_chat(chat_id, sender_member_id)
+        other_members = await repo.get_other_members_in_chat(chat_id, sender_member_id)
 
-        to_member_id = _resolve_recipient_member(
-            sender_member_id, other_member, parsed.recipient_keyword,
+        resolved = _resolve_recipient_member(
+            sender_member_id, other_members, parsed.recipient_keyword, repo,
         )
 
-        if to_member_id is None and parsed.recipient_keyword not in ("мне", "нам", "всем"):
-            await message.answer("Не понял, кому напомнить. Зарегистрируйтесь через /reg Имя")
+        if resolved == "ambiguous":
+            names = ", ".join(m.display_name for m in other_members)
+            await message.answer(
+                f"В чате несколько участников. Укажи имя:\n{names}\n"
+                f"Пример: напомни {other_members[0].display_name} через 5 мин позвонить"
+            )
             return
+        if resolved == "no_members":
+            await message.answer("В чате больше никто не зарегистрирован.")
+            return
+        if resolved == "not_found":
+            names = ", ".join(m.display_name for m in other_members)
+            await message.answer(
+                f"Не нашёл такого имени. Зарегистрированы: {names}"
+            )
+            return
+
+        to_member_id = resolved
+        resolved_member = next(
+            (m for m in other_members if m.id == to_member_id), None,
+        )
 
         rid = await repo.create_reminder(
             chat_id=chat_id,
@@ -190,7 +218,7 @@ async def handle_reminder_message(message: types.Message) -> None:
 
     time_str = _format_utc_to_local(parsed.remind_at, tz_offset_minutes)
     target = "тебе" if to_member_id == sender_member_id else (
-        other_member.display_name if other_member and to_member_id == other_member.id else "всем"
+        resolved_member.display_name if resolved_member and to_member_id == resolved_member.id else "всем"
     )
     await message.answer(
         f"Напоминание #{rid} создано!\n"
