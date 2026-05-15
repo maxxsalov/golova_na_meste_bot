@@ -27,6 +27,11 @@ _ABSOLUTE_TIME_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_TIME_ONLY_PATTERN = re.compile(
+    r"\bв\s+(\d{1,2}):(\d{2})\b",
+    re.IGNORECASE,
+)
+
 _UNIT_MINUTES = {"минут", "мин"}
 _UNIT_HOURS = {"час", "часа", "часов"}
 _UNIT_DAYS = {"день", "дня", "дней"}
@@ -127,24 +132,39 @@ def _parse_absolute_time(
     message: str, tz: datetime.timezone,
 ) -> datetime.datetime | None:
     m = _ABSOLUTE_TIME_PATTERN.search(message)
-    if not m:
-        return None
-    day_word = m.group(1).lower()
-    hour = int(m.group(2))
-    minute = int(m.group(3))
+    if m:
+        day_word = m.group(1).lower()
+        hour = int(m.group(2))
+        minute = int(m.group(3))
 
-    now = datetime.datetime.now(tz=tz)
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        now = datetime.datetime.now(tz=tz)
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
-    if day_word == "завтра":
-        target += datetime.timedelta(days=1)
-    elif day_word == "послезавтра":
-        target += datetime.timedelta(days=2)
+        if day_word == "завтра":
+            target += datetime.timedelta(days=1)
+        elif day_word == "послезавтра":
+            target += datetime.timedelta(days=2)
 
-    if target <= now and day_word == "сегодня":
-        target += datetime.timedelta(days=1)
+        if target <= now and day_word == "сегодня":
+            target += datetime.timedelta(days=1)
 
-    return target.replace(tzinfo=tz)
+        return target.replace(tzinfo=tz)
+
+    # Fallback: just "в HH:MM" (today)
+    m2 = _TIME_ONLY_PATTERN.search(message)
+    if m2:
+        hour = int(m2.group(1))
+        minute = int(m2.group(2))
+
+        now = datetime.datetime.now(tz=tz)
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+        if target <= now:
+            target += datetime.timedelta(days=1)
+
+        return target.replace(tzinfo=tz)
+
+    return None
 
 
 def parse_message(message: str, tz_offset_minutes: int = 180) -> ParseResult | None:
